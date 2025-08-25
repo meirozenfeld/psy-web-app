@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../firebase";
+import { doc, setDoc, serverTimestamp } from "firebase/firestore";
+import { auth, db } from "../firebase";
 import { Link, useNavigate } from "react-router-dom";
 
 export default function Signup() {
@@ -24,8 +25,17 @@ export default function Signup() {
 
         setLoading(true);
         try {
-            await createUserWithEmailAndPassword(auth, email.trim(), pass);
-            navigate("/");
+            const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
+
+            await setDoc(doc(db, "users", cred.user.uid), {
+                uid: cred.user.uid,
+                email: cred.user.email ?? null,
+                hasCompletedOnboarding: false,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            }, { merge: true });
+
+            navigate("/onboarding", { replace: true });
         } catch (e: any) {
             const code = e?.code || "";
             if (code === "auth/email-already-in-use") {

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { signInWithEmailAndPassword } from "firebase/auth";
-import { auth } from "../firebase";
+import { doc, getDoc } from "firebase/firestore";
+import { auth, db } from "../firebase";
 import { Link, useNavigate } from "react-router-dom";
 
 export default function Login() {
@@ -17,7 +18,15 @@ export default function Login() {
         setLoading(true);
         try {
             await signInWithEmailAndPassword(auth, email.trim(), pass);
-            navigate("/");
+
+            const u = auth.currentUser;
+            if (u) {
+                const snap = await getDoc(doc(db, "users", u.uid));
+                const done = snap.exists() && snap.data()?.hasCompletedOnboarding === true;
+                navigate(done ? "/" : "/onboarding", { replace: true });
+            } else {
+                navigate("/", { replace: true });
+            }
         } catch (e: any) {
             const code = e?.code || "";
             if (code === "auth/invalid-credential" || code === "auth/wrong-password") {
@@ -52,7 +61,7 @@ export default function Login() {
                                 <path d="M12 8l1.5 3h3L13 15l-1.5-3h-3L12 8z" />
                             </svg>
                         </div>
-                        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Welcome back</h1>
+                        <h1 className="text-2xl font-semibold tracking-tight text-slate-900">Sign In</h1>
                         <p className="mt-1 text-sm text-slate-600">Sign in to your Psy Web‑App account</p>
                     </div>
 

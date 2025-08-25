@@ -45,3 +45,12 @@ functions/lib/
 coverage/
 cypress/videos/
 cypress/screenshots/
+
+
+# סביבות מקומיות (לא עולות ל-git)
+frontend/.env*
+functions/.env*
+
+# החרגות: כן להעלות example
+!frontend/.env.example
+!functions/.env.example
