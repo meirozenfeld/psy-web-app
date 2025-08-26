@@ -1,8 +1,7 @@
 import { initializeApp } from "firebase/app";
-import { getAuth } from "firebase/auth";
+import { getAuth, GoogleAuthProvider } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
-// אפשר גם Analytics אם תרצי
 import { getAnalytics } from "firebase/analytics";
 
 const firebaseConfig = {
@@ -20,3 +19,8 @@ export const auth = getAuth(app);
 export const db = getFirestore(app);
 export const storage = getStorage(app);
 export const analytics = getAnalytics(app);
+
+// Google Auth provider for sign-in
+export const googleProvider = new GoogleAuthProvider();
+// Always show account selection on each sign-in
+googleProvider.setCustomParameters({ prompt: "select_account" });
