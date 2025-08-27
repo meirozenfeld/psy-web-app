@@ -17,6 +17,7 @@ import Payments from "./pages/Payments";
 import Notes from "./pages/Notes";
 import Profile from "./pages/Profile";
 import Settings from "./pages/Settings";
+import ClientDetails from "./pages/ClientDetails";
 
 // Public pages (no sidebar/layout)
 import Login from "./pages/Login";
@@ -32,6 +33,7 @@ const router = createBrowserRouter([
       { index: true, element: <Home /> },       // "/"
       { path: "home", element: <Home /> },
       { path: "clients", element: <Clients /> },
+      { path: "clients/:id", element: <ClientDetails /> },
       { path: "sessions", element: <Sessions /> },
       { path: "calendar", element: <Calendar /> },
       { path: "reports", element: <Reports /> },
