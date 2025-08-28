@@ -39,17 +39,31 @@ export default function ClientDetails() {
     return (
         <div className="max-w-5xl">
             {/* Header */}
-            <div className="mb-4">
-                <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                    {title || "Client"}
-                </h1>
-                <p className="mt-1 text-sm text-slate-600">Client details</p>
-                {err && (
-                    <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
-                        {err}
-                    </div>
-                )}
+            <div className="mb-4 flex items-center justify-between">
+                {/* Left side: title + subtitle */}
+                <div>
+                    <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
+                        {title || "Client"}
+                    </h1>
+                    <p className="mt-1 text-sm text-slate-600">Client details</p>
+
+                    {err && (
+                        <div className="mt-3 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+                            {err}
+                        </div>
+                    )}
+                </div>
+
+                {/* Right side: back button */}
+                <button
+                    type="button"
+                    onClick={() => navigate("/clients")}   // go back to clients page
+                    className="rounded-lg border border-slate-300 bg-white px-3 py-1.5 text-sm font-medium text-slate-700 hover:bg-slate-50"
+                >
+                    Back to Clients
+                </button>
             </div>
+
 
             {/* Tabs bar */}
             <div className="mb-4 flex gap-2 border-b border-slate-200">

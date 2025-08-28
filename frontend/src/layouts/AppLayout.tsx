@@ -1,16 +1,37 @@
-// AppLayout: top-level shell with auth guard, live profile subscription, and responsive sidebar
-import { useEffect, useState, type ReactNode } from "react";
+// AppLayout: top-level shell with auth guard, live profile subscription, responsive sidebar,
+// and a header that includes the OrgSwitcher and a small scope badge.
+
+import { useEffect, useState } from "react";
 import { app, auth, db } from "../firebase";
 import { onAuthStateChanged, signOut, type User } from "firebase/auth";
 import { doc, onSnapshot } from "firebase/firestore";
 import { useNavigate, useLocation, Outlet } from "react-router-dom";
 import Sidebar, { type NavItem as SidebarNavItem } from "../components/Sidebar";
 
+import OrgSwitcher from "./OrgSwitcher";
+import { useScope } from "../scope/ScopeContext"; // read current scope (solo/org)
+import ScopeRedirectOnChange from "../scope/ScopeRedirectOnChange"; // <-- add
+
+// ---- Types ----
 type UserProfile = {
   firstName?: string;
   lastName?: string;
   hasCompletedOnboarding?: boolean;
 };
+
+// Small badge that shows current scope (solo or org name)
+function ScopeBadge() {
+  const { scope } = useScope();
+  return (
+    <span
+      className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-white px-2 py-0.5 text-xs text-slate-700"
+      title={scope.mode === "solo" ? "Personal mode" : "Clinic/Team mode"}
+    >
+      <span className="h-1.5 w-1.5 rounded-full bg-indigo-600" />
+      {scope.mode === "solo" ? "Scope: Solo" : `Scope: ${scope.orgName || "Clinic"}`}
+    </span>
+  );
+}
 
 export default function AppLayout() {
   const navigate = useNavigate();
@@ -26,9 +47,11 @@ export default function AppLayout() {
   const [mobileOpen, setMobileOpen] = useState(false);
   const [collapsed, setCollapsed] = useState(false);
 
-
+  // Auth guard + redirect
   useEffect(() => {
+    // Helpful for verifying the correct Firebase project at runtime
     console.log("Firebase projectId:", app.options.projectId);
+
     const unsub = onAuthStateChanged(auth, (u) => {
       setUser(u);
       setChecking(false);
@@ -37,15 +60,13 @@ export default function AppLayout() {
     return () => unsub();
   }, [navigate]);
 
-  // Subscribe to live user profile document; updates local state and cleans up on unmount
+  // Live user profile document subscription; cleans up on unmount
   useEffect(() => {
-    // No authenticated user: reset profile state and stop loading
     if (!user) {
       setProfile(null);
       setProfileLoading(false);
       return;
     }
-
     setProfileLoading(true);
 
     const ref = doc(db, "users", user.uid);
@@ -62,10 +83,9 @@ export default function AppLayout() {
     );
 
     return () => unsub();
-  }, [user?.uid, db]);
+  }, [user?.uid]);
 
-
-  // Close the mobile drawer on route changes to prevent stale open state
+  // Close mobile sidebar when route changes
   useEffect(() => { setMobileOpen(false); }, [location.pathname]);
 
   const doLogout = async () => {
@@ -73,11 +93,11 @@ export default function AppLayout() {
     catch (e) { console.error("Logout error", e); }
   };
 
-
+  // Sidebar nav items
   const nav: SidebarNavItem[] = [
     {
       label: "Home",
-      path: "/", // root route
+      path: "/",
       icon: (
         <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
           <path strokeWidth="2" d="M3 10l9-7 9 7v9a2 2 0 0 1-2 2h-4a2 2 0 0 1-2-2v-4H9v4a2 2 0 0 1-2 2H3z" />
@@ -90,6 +110,15 @@ export default function AppLayout() {
           <path strokeWidth="2" d="M16 11c1.66 0 3-1.57 3-3.5S17.66 4 16 4s-3 1.57-3 3.5S14.34 11 16 11zM8 11c1.66 0 3-1.57 3-3.5S9.66 4 8 4 5 5.57 5 7.5 6.34 11 8 11zM8 13c-2.67 0-8 1.34-8 4v2h8M16 13c.67 0 1.31.05 1.91.14C20.5 13.5 24 14.67 24 17v2h-8" />
         </svg>
       )
+    },
+    {
+      label: "My Clinics",
+      path: "/orgs",
+      icon: (
+        <svg className="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor">
+          <path strokeWidth="2" d="M3 10h18M5 10v9h14v-9M9 10V6h6v4" />
+        </svg>
+      ),
     },
     {
       label: "Sessions", path: "/sessions", icon: (
@@ -171,6 +200,10 @@ export default function AppLayout() {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-sky-50 via-indigo-50 to-purple-50">
+      <ScopeRedirectOnChange />
+      {/* Background decorative blobs (non-interactive) */}
+      <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-sky-200/60 blur-3xl" />
+      {/* ...rest of your layout... */}
       {/* Background decorative blobs (non-interactive) */}
       <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-sky-200/60 blur-3xl" />
       <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-indigo-200/60 blur-3xl" />
@@ -189,9 +222,18 @@ export default function AppLayout() {
           currentPath={location.pathname}
         />
 
-        {/* Main area: nested routes render here via <Outlet /> */}
-        <main className="flex-1 rounded-2xl border border-white/60 bg-white/80 p-8 shadow-lg backdrop-blur">
-          <Outlet context={{ welcomeName }} />
+        {/* Main area: header with switcher + nested routes render here via <Outlet /> */}
+        <main className="flex-1 rounded-2xl border border-white/60 bg-white/80 p-6 shadow-lg backdrop-blur">
+          {/* Top bar: left badge shows scope, right: org switcher */}
+          <div className="mb-4 flex items-center justify-between">
+            <ScopeBadge />
+            <OrgSwitcher />
+          </div>
+
+          {/* Page outlet */}
+          <div className="rounded-2xl border border-slate-200/60 bg-white/70 p-6">
+            <Outlet context={{ welcomeName }} />
+          </div>
         </main>
       </div>
     </div>

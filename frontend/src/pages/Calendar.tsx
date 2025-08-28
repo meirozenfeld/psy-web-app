@@ -31,6 +31,9 @@ import {
 import { useNavigate } from "react-router-dom";
 import CreateSessionModal from "../components/calendar/CreateSessionModal";
 import type { CreateSessionForm } from "../components/calendar/CreateSessionModal";
+import { useScope } from "../scope/ScopeContext";
+import { useScopedRefs } from "../scope/path";
+import type { DocumentSnapshot, QuerySnapshot, DocumentData } from "firebase/firestore";
 
 // ---- Types ----
 type Session = {
@@ -139,7 +142,20 @@ function fromDateTimeInputs(dateStr: string, timeStr: string) {
 // ---- Page ----
 export default function Calendar() {
   const navigate = useNavigate();
+
+  // Current scope (solo / org + ids)
+  const { scope } = useScope();
+  // Scoped Firestore ref builders
+  // ליד שאר הייבוא/מצב
+  const { collection: scopedCol, doc: scopedDoc, rootDoc: scopedDocRoot } = useScopedRefs();
+
+
+  // If in org mode but no org selected yet → optional guard UI (keeps component safe)
+  const isOrgMode = scope.mode === "org";
+  const hasOrg = !!scope.orgId;
+  const uid = auth.currentUser?.uid || null; // solo mode guard
   const user = auth.currentUser;
+
 
   // Anchor date for visible range
   const [cursor, setCursor] = useState<Date>(startOfDay(new Date()));
@@ -193,29 +209,44 @@ export default function Calendar() {
   }, []);
 
   useEffect(() => {
-    if (!user) return;
-    const ref = doc(db, "users", user.uid);
-    const unsub = onSnapDoc(ref, (snap) => {
-      const data = snap.data() as any;
-      const v = (data?.prefs?.defaultView as ViewMode) || null;
-      const tz = (data?.prefs?.timeZone as string) || null;
-      if (v) setView(v);              // set default view once loaded
-      if (tz) setUserTz(tz);          // store time zone for rendering
-    });
-    return () => unsub();
-  }, [user?.uid]);
+    try {
+      // ⬅ חשוב: להעביר את db
+      const prefsRef = scopedDocRoot(db);
+      const unsub = onSnapDoc(prefsRef, (snap: DocumentSnapshot<DocumentData>) => {
+        const data = snap.data() as any;
+        const v = (data?.prefs?.defaultView as ViewMode) || null;
+        const tz = (data?.prefs?.timeZone as string) || null;
+        if (v) setView(v);
+        if (tz) setUserTz(tz);
+      });
+      return () => unsub();
+    } catch {
+      // אם אין עדיין uid/orgId – נחכה עד שה-scope תקין
+      return;
+    }
+  }, [scope.mode, scope.orgId, uid]);
+
+
+
 
   // Realtime clients list
   useEffect(() => {
-    if (!user) {
+    // Guard: no scope identity → empty list (e.g. org selected but missing id)
+    if (isOrgMode && !hasOrg) {
       setClients([]);
       setClientsErr(null);
       return;
     }
-    const ref = collection(db, "users", user.uid, "clients");
+    if (!isOrgMode && !uid) {
+      setClients([]);
+      setClientsErr(null);
+      return;
+    }
+
+    const ref = scopedCol(db, "clients");
     const unsub = onSnapshot(
       ref,
-      (snap) => {
+      (snap: QuerySnapshot<DocumentData>) => {
         const rows: Client[] = [];
         snap.forEach((d) => {
           const c = d.data() as any;
@@ -241,8 +272,10 @@ export default function Calendar() {
         setClientsErr(err?.message || "Failed to load clients");
       }
     );
+
     return () => unsub();
-  }, [user?.uid]);
+  }, [isOrgMode, hasOrg, uid, scope.mode, scope.orgId]);
+
 
   // Visible range (day/week/month) for Firestore subscription
   const visibleRange = useMemo(() => {
@@ -259,16 +292,24 @@ export default function Calendar() {
 
   // Subscribe to sessions within the visible range
   useEffect(() => {
-    if (!user) {
+    // Guard by scope identity
+    if (isOrgMode && !hasOrg) {
       setSessions([]);
       setLoading(false);
       setError(null);
       return;
     }
+    if (!isOrgMode && !uid) {
+      setSessions([]);
+      setLoading(false);
+      setError(null);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
-    const ref = collection(db, "users", user.uid, "sessions");
+    const ref = scopedCol(db, "sessions");
     const qref = query(
       ref,
       where("startAt", ">=", visibleRange.start),
@@ -278,7 +319,7 @@ export default function Calendar() {
 
     const unsub = onSnapshot(
       qref,
-      (snap) => {
+      (snap: QuerySnapshot<DocumentData>) => {
         const list: Session[] = [];
         snap.forEach((d) => list.push({ id: d.id, ...(d.data() as Session) }));
         setSessions(list);
@@ -292,8 +333,10 @@ export default function Calendar() {
       }
     );
 
+
     return () => unsub();
-  }, [user?.uid, visibleRange.start, visibleRange.end]);
+  }, [visibleRange.start, visibleRange.end, isOrgMode, hasOrg, uid, scope.mode, scope.orgId]);
+
 
   // Group by day (for all views)
   const byDay = useMemo(() => {
@@ -356,7 +399,9 @@ export default function Calendar() {
 
     setSaving(true);
     try {
-      await addDoc(collection(db, "users", user.uid, "sessions"), {
+      const sessionsCol = scopedCol(db, "sessions");
+      // In Calendar.tsx -> onCreate()
+      await addDoc(sessionsCol, {
         ...(form.clientId ? { clientId: form.clientId } : {}),
         clientName: form.clientName.trim(),
         startAt: start,
@@ -364,7 +409,10 @@ export default function Calendar() {
         location: form.location.trim(),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
-      } as Omit<Session, "id">);
+        createdBy: user.uid,            // <-- add creator for rules & audits
+      });
+
+
 
       setOpenAdd(false);
     } catch (err: any) {
@@ -400,7 +448,7 @@ export default function Calendar() {
 
     setSavingEdit(true);
     try {
-      const ref = doc(db, "users", user.uid, "sessions", selected.id!);
+      const ref = scopedDoc(db, "sessions", selected.id!);
       await updateDoc(ref, {
         clientName: editForm.clientName.trim(),
         startAt: start,
@@ -408,6 +456,7 @@ export default function Calendar() {
         location: editForm.location.trim(),
         updatedAt: serverTimestamp(),
       });
+
       setSelected(null);
     } catch (err: any) {
       alert(err?.message || "Failed to update session");
@@ -423,8 +472,9 @@ export default function Calendar() {
 
     setSavingEdit(true);
     try {
-      const ref = doc(db, "users", user.uid, "sessions", selected.id!);
+      const ref = scopedDoc(db, "sessions", selected.id!);
       await deleteDoc(ref);
+
       setSelected(null);
     } catch (err: any) {
       alert(err?.message || "Failed to delete session");
@@ -440,6 +490,16 @@ export default function Calendar() {
     else setCursor(addMonths(cursor, dir));
   }
   const todayKey = dayKey(new Date());
+  if (isOrgMode && !hasOrg) {
+    return (
+      <div className="max-w-3xl">
+        <h1 className="text-2xl font-semibold text-slate-900">Calendar</h1>
+        <p className="mt-2 text-sm text-slate-600">
+          Please select a clinic/team from the switcher to view the calendar.
+        </p>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-6xl">

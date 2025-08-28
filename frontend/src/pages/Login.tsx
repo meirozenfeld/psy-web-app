@@ -2,28 +2,48 @@ import { useState } from "react";
 import {
     signInWithEmailAndPassword,
     signInWithPopup,
-    sendPasswordResetEmail, // ⬅ NEW
+    sendPasswordResetEmail,
     type User,
 } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db, googleProvider } from "../firebase";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { upsertEmailIndex } from "../utils/emailIndex";
 
 export default function Login() {
     const navigate = useNavigate();
+    const [sp] = useSearchParams();
+    const PENDING_INVITE_KEY = "pendingInvitePath";
+    const AFTER_ONBOARDING_NEXT = "afterOnboardingNext";
+    const nextParam = sp.get("next");
+
     const [email, setEmail] = useState("");
     const [pass, setPass] = useState("");
     const [showPass, setShowPass] = useState(false);
     const [loading, setLoading] = useState(false);
     const [err, setErr] = useState<string | null>(null);
-    const [info, setInfo] = useState<string | null>(null); // ⬅ NEW: success/info banner
+    const [info, setInfo] = useState<string | null>(null);
 
-    // After successful sign-in: ensure user document exists, then redirect to onboarding or home
+    // After successful sign-in: ensure user doc exists, then redirect
     const postAuthRedirect = async (user: User) => {
         const ref = doc(db, "users", user.uid);
         const snap = await getDoc(ref);
 
+        // פונקציה קטנה לשמירת יעד לאחר Onboarding
+        const stashNextAndGoToOnboarding = () => {
+            const next =
+                sp.get("next") ||
+                localStorage.getItem(PENDING_INVITE_KEY) ||
+                null;
+            if (next) {
+                localStorage.setItem(AFTER_ONBOARDING_NEXT, next);
+                localStorage.removeItem(PENDING_INVITE_KEY);
+            }
+            navigate("/onboarding", { replace: true });
+        };
+
         if (!snap.exists()) {
+            // משתמש חדש – צור מסמך ואז שלח ל-Onboarding (לא לעמוד ההזמנה!)
             const display = user.displayName || "";
             const parts = display.trim().split(" ");
             const firstName = parts[0] || "";
@@ -41,12 +61,49 @@ export default function Login() {
                 },
                 { merge: true }
             );
-            navigate("/onboarding", { replace: true });
+
+            await upsertEmailIndex({
+                uid: user.uid,
+                email: user.email,
+                firstName,
+                lastName,
+            });
+
+            // תמיד קודם Onboarding, ושומרים את היעד אם יש
+            stashNextAndGoToOnboarding();
             return;
         }
 
-        const data = snap.data() as { hasCompletedOnboarding?: boolean };
-        navigate(data?.hasCompletedOnboarding ? "/" : "/onboarding", { replace: true });
+        // משתמש קיים
+        const data = snap.data() as {
+            hasCompletedOnboarding?: boolean;
+            firstName?: string;
+            lastName?: string;
+            email?: string;
+        };
+
+        await upsertEmailIndex({
+            uid: user.uid,
+            email: data.email ?? user.email ?? undefined,
+            firstName: data.firstName,
+            lastName: data.lastName,
+        });
+
+        if (!data?.hasCompletedOnboarding) {
+            // עדיין לא השלים Onboarding → קודם Onboarding
+            stashNextAndGoToOnboarding();
+            return;
+        }
+
+        // השלים Onboarding → אפשר לכבד next ולחזור להזמנה
+        const next = sp.get("next") || localStorage.getItem(PENDING_INVITE_KEY);
+        if (next) {
+            localStorage.removeItem(PENDING_INVITE_KEY);
+            navigate(next, { replace: true });
+            return;
+        }
+
+        navigate("/", { replace: true });
     };
 
     const onSubmit = async (e: React.FormEvent) => {
@@ -91,12 +148,10 @@ export default function Login() {
         }
     };
 
-    // ⬅ NEW: forgot password flow
     const onForgotPassword = async () => {
         setErr(null);
         setInfo(null);
         const mail = email.trim();
-
         if (!mail) {
             setErr("Please enter your email first to reset your password.");
             return;
@@ -109,7 +164,6 @@ export default function Login() {
             if (code === "auth/invalid-email") {
                 setErr("Invalid email address.");
             } else if (code === "auth/user-not-found") {
-                // Do not reveal whether account exists; return neutral message for security
                 setInfo("If an account exists for this email, a reset link was sent.");
             } else {
                 setErr("Could not send reset email. Please try again.");
@@ -262,9 +316,13 @@ export default function Login() {
 
                             <p className="text-center text-sm text-slate-600">
                                 Don&apos;t have an account?{" "}
-                                <Link to="/signup" className="font-medium text-sky-700 underline-offset-4 hover:underline">
+                                <Link
+                                    to={nextParam ? `/signup?next=${encodeURIComponent(nextParam)}` : "/signup"}
+                                    className="font-medium text-sky-700 underline-offset-4 hover:underline"
+                                >
                                     Sign up
                                 </Link>
+
                             </p>
                         </form>
                     </div>

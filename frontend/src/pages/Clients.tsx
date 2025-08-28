@@ -10,6 +10,7 @@ import {
   query,
   serverTimestamp,
 } from "firebase/firestore";
+import { useScope } from "../scope/ScopeContext"; //
 
 // ---- Types ----
 export type Client = {
@@ -28,6 +29,7 @@ type SortKey = "name-asc" | "name-desc" | "createdAt" | "status";
 export default function Clients() {
   const navigate = useNavigate();
   const user = auth.currentUser; // AppLayout guards, but keep defensive
+  const { scope } = useScope(); // <-- consume scope (solo/org + orgId)
 
   // Realtime list
   const [loading, setLoading] = useState(true);
@@ -49,27 +51,40 @@ export default function Clients() {
     status: "active",
   });
 
-  // Load clients in realtime
   useEffect(() => {
+    // Guard: auth not ready
     if (!user) {
       setClients([]);
       setLoading(false);
       return;
     }
+    // Guard: org mode must have orgId
+    if (scope.mode === "org" && !scope.orgId) {
+      setClients([]);
+      setLoading(false);
+      return;
+    }
+
     setLoading(true);
     setError(null);
 
-    const ref = collection(db, "users", user.uid, "clients");
-    // default order by createdAt desc (fallback to name sort later)
-    const qref = query(ref, orderBy("createdAt", "desc"));
+    // ✅ Choose the collection path by scope:
+    // - Solo mode  -> users/{uid}/clients
+    // - Org mode   -> orgs/{orgId}/clients
+    const baseRef =
+      scope.mode === "org"
+        ? collection(db, "orgs", scope.orgId!, "clients")
+        : collection(db, "users", user.uid, "clients");
+
+    // Default ordering by createdAt desc (fallback to client-side sorts later)
+    const qref = query(baseRef, orderBy("createdAt", "desc"));
+
+    // Re-subscribe whenever user or scope changes
     const unsub = onSnapshot(
       qref,
       (snap) => {
         const rows: Client[] = [];
-        snap.forEach((d) => {
-          const data = d.data() as Client;
-          rows.push({ ...data, id: d.id });
-        });
+        snap.forEach((d) => rows.push({ ...(d.data() as Client), id: d.id }));
         setClients(rows);
         setLoading(false);
       },
@@ -81,7 +96,8 @@ export default function Clients() {
     );
 
     return () => unsub();
-  }, [user?.uid]);
+  }, [user?.uid, scope.mode, scope.orgId]); // 👈 critical deps
+
 
   // Derived filtered/sorted list
   const list = useMemo(() => {
@@ -125,9 +141,15 @@ export default function Clients() {
     e.preventDefault();
     if (!user) return;
     if (!form.firstName.trim() || !form.lastName.trim()) return;
+
     setSaving(true);
     try {
-      const ref = collection(db, "users", user.uid, "clients");
+      // Route the write to the proper collection
+      const ref =
+        scope.mode === "org" && scope.orgId
+          ? collection(db, "orgs", scope.orgId, "clients")
+          : collection(db, "users", user.uid, "clients");
+
       await addDoc(ref, {
         firstName: form.firstName.trim(),
         lastName: form.lastName.trim(),
@@ -137,6 +159,7 @@ export default function Clients() {
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       } satisfies Client);
+
       setOpenAdd(false);
       resetForm();
     } catch (e: any) {

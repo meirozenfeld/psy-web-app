@@ -2,10 +2,18 @@ import { useState } from "react";
 import { createUserWithEmailAndPassword } from "firebase/auth";
 import { doc, setDoc, serverTimestamp } from "firebase/firestore";
 import { auth, db } from "../firebase";
-import { Link, useNavigate } from "react-router-dom";
+import { Link, useNavigate, useSearchParams } from "react-router-dom";
+import { upsertEmailIndex } from "../utils/emailIndex";
+import { signInWithPopup } from "firebase/auth";
+import { googleProvider } from "../firebase";
 
 export default function Signup() {
     const navigate = useNavigate();
+    const [sp] = useSearchParams();
+    const nextParam = sp.get("next"); // NEW
+    const PENDING_INVITE_KEY = "pendingInvitePath";
+    const AFTER_ONBOARDING_NEXT = "afterOnboardingNext";
+
     const [email, setEmail] = useState("");
     const [pass, setPass] = useState("");
     const [confirmPass, setConfirmPass] = useState("");
@@ -27,15 +35,38 @@ export default function Signup() {
         try {
             const cred = await createUserWithEmailAndPassword(auth, email.trim(), pass);
 
-            await setDoc(doc(db, "users", cred.user.uid), {
-                uid: cred.user.uid,
-                email: cred.user.email ?? null,
-                hasCompletedOnboarding: false,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-            }, { merge: true });
+            await setDoc(
+                doc(db, "users", cred.user.uid),
+                {
+                    uid: cred.user.uid,
+                    email: cred.user.email ?? null,
+                    hasCompletedOnboarding: false,
+                    createdAt: serverTimestamp(),
+                    updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+            );
 
+            await upsertEmailIndex({
+                uid: cred.user.uid,
+                email: cred.user.email ?? undefined,
+            });
+
+            // If signup came from an invite, return to that invite page first
+            const next =
+                sp.get("next") ||
+                localStorage.getItem(PENDING_INVITE_KEY) ||
+                null;
+
+            if (next) {
+                localStorage.setItem(AFTER_ONBOARDING_NEXT, next);
+                localStorage.removeItem(PENDING_INVITE_KEY);
+            }
+
+            // אל תנווט ל-next כאן!
             navigate("/onboarding", { replace: true });
+
+
         } catch (e: any) {
             const code = e?.code || "";
             if (code === "auth/email-already-in-use") {
@@ -47,6 +78,42 @@ export default function Signup() {
             } else {
                 setErr("Signup failed. Please try again.");
             }
+        } finally {
+            setLoading(false);
+        }
+    };
+    const onGoogle = async () => {
+        setErr(null);
+        setLoading(true);
+        try {
+            const cred = await signInWithPopup(auth, googleProvider);
+            // ensure user doc
+            await setDoc(doc(db, "users", cred.user.uid), {
+                uid: cred.user.uid,
+                email: cred.user.email ?? null,
+                hasCompletedOnboarding: false,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+            }, { merge: true });
+
+            await upsertEmailIndex({
+                uid: cred.user.uid,
+                email: cred.user.email ?? undefined,
+            });
+
+            const next =
+                sp.get("next") ||
+                localStorage.getItem(PENDING_INVITE_KEY) ||
+                null;
+
+            if (next) {
+                localStorage.setItem(AFTER_ONBOARDING_NEXT, next);
+                localStorage.removeItem(PENDING_INVITE_KEY);
+            }
+            navigate("/onboarding", { replace: true });
+
+        } catch (e: any) {
+            setErr("Google signup failed. Please try again.");
         } finally {
             setLoading(false);
         }
@@ -202,14 +269,40 @@ export default function Signup() {
                                 <span className="relative z-10">{loading ? "Creating account…" : "Sign up"}</span>
                                 <span className="absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white/30 to-transparent transition group-hover:translate-x-full" />
                             </button>
+                            {/* Divider between email/password and Google sign-in */}
+                            <div className="flex items-center gap-3">
+                                <span className="h-px flex-1 bg-slate-200" />
+                                <span className="text-xs uppercase tracking-wider text-slate-400">or</span>
+                                <span className="h-px flex-1 bg-slate-200" />
+                            </div>
 
+                            {/* Google sign-in button */}
+                            <button
+                                type="button"
+                                onClick={onGoogle}
+                                disabled={loading}
+                                className="w-full rounded-xl border border-slate-300 bg-white py-2.5 font-medium text-slate-700 shadow-sm hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-sky-600 disabled:opacity-60 flex items-center justify-center gap-2"
+                            >
+                                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 48 48">
+                                    <path fill="#FFC107" d="M43.6 20.5H42V20H24v8h11.3C33.7 32.6 29.3 36 24 36c-6.6 0-12-5.4-12-12s5.4-12 12-12c3.1 0 5.9 1.2 8.1 3.1l5.7-5.7C34.6 6.2 29.6 4 24 4 12.9 4 4 12.9 4 24s8.9 20 20 20c11 0 19.7-9 19.7-20 0-1.3-.1-2.2-.1-3.5z" />
+                                    <path fill="#FF3D00" d="M6.3 14.7l6.6 4.8C14.7 16.2 19 14 24 14c3.1 0 5.9 1.2 8.1 3.1l5.7-5.7C34.6 6.2 29.6 4 24 4 16.3 4 9.6 8.2 6.3 14.7z" />
+                                    <path fill="#4CAF50" d="M24 44c5.2 0 10-2 13.5-5.3l-6.2-5.1C29.3 36 26.8 37 24 37c-5.2 0-9.6-3.4-11.2-8.1l-6.6 5.1C9.5 39.8 16.2 44 24 44z" />
+                                    <path fill="#1976D2" d="M43.6 20.5H42V20H24v8h11.3c-1.6 4.6-6 8-11.3 8-3.2 0-6.1-1.2-8.2-3.1l-6.6 5.1C12 42 17.7 44 24 44c11 0 19.7-9 19.7-20 0-1.3-.1-2.2-.1-3.5z" />
+                                </svg>
+                                Continue with Google
+                            </button>
                             {/* Secondary link */}
                             <p className="text-center text-sm text-slate-600">
                                 Already have an account?{" "}
-                                <Link to="/login" className="font-medium text-sky-700 underline-offset-4 hover:underline">
+                                <Link
+                                    to={nextParam ? `/login?next=${encodeURIComponent(nextParam)}` : "/login"}
+                                    className="font-medium text-sky-700 underline-offset-4 hover:underline"
+                                >
                                     Sign in
                                 </Link>
                             </p>
+
+
                         </form>
                     </div>
 

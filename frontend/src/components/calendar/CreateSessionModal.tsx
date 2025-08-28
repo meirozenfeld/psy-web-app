@@ -110,8 +110,8 @@ export default function CreateSessionModal({
                                     if (e.key === "Escape") setShowSuggestions(false);
                                 }}
                                 className={`w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 ${!form.clientName.trim()
-                                        ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
-                                        : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
+                                    ? "border-rose-300 focus:border-rose-400 focus:ring-rose-100"
+                                    : "border-slate-300 focus:border-indigo-400 focus:ring-indigo-100"
                                     }`}
                                 placeholder="e.g., Dana Levi"
                                 required

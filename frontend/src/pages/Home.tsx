@@ -4,17 +4,24 @@ import { useOutletContext } from "react-router-dom";
 import RemindersCard from "../components/home/RemindersCard";
 import LatestEventCard from "../components/home/LatestEventCard";
 import UpcomingSessionsCard from "../components/home/UpcomingSessionsCard";
+import { useScope } from "../scope/ScopeContext";
 
 type LayoutCtx = { welcomeName: string };
 
 export default function Home() {
-    const { welcomeName } = useOutletContext<LayoutCtx>();
 
+    const { welcomeName } = useOutletContext<LayoutCtx>();
+    const { scope } = useScope();
+    // Build suffix based on scope mode
+    const suffix =
+        scope.mode === "solo"
+            ? "Private Clinic"               // private therapist
+            : scope.orgName || "Clinic"; // clinic/team name
     return (
         <>
             {/* Page heading */}
             <h1 className="text-2xl font-semibold tracking-tight text-slate-900">
-                Welcome{welcomeName ? ` ${welcomeName}` : ""}
+                Welcome{welcomeName ? ` ${welcomeName}` : ""} – {suffix}
             </h1>
             <p className="mt-1 text-sm text-slate-600">
                 Select a section from the sidebar to get started.

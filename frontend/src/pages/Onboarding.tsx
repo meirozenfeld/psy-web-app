@@ -4,6 +4,9 @@ import { auth, db } from "../firebase";
 import { onAuthStateChanged, type User } from "firebase/auth";
 import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
 import { useNavigate } from "react-router-dom";
+import { upsertEmailIndex } from "../utils/emailIndex";
+
+const AFTER_ONBOARDING_NEXT = "afterOnboardingNext";
 
 export default function Onboarding() {
     const navigate = useNavigate();
@@ -22,7 +25,7 @@ export default function Onboarding() {
     const [err, setErr] = useState<string | null>(null);
     const [checking, setChecking] = useState(true);
 
-    // Auth guard and redirect if onboarding already completed
+    // Auth guard + prefill + redirect if already completed
     useEffect(() => {
         const unsub = onAuthStateChanged(auth, async (u) => {
             if (!u) {
@@ -31,18 +34,33 @@ export default function Onboarding() {
             }
             setUser(u);
 
-            // If onboarding already completed, redirect to home
             const snap = await getDoc(doc(db, "users", u.uid));
+
+            // If onboarding already completed, respect a stored next and exit
             if (snap.exists() && snap.data()?.hasCompletedOnboarding) {
-                navigate("/", { replace: true });
+                const next = localStorage.getItem(AFTER_ONBOARDING_NEXT);
+                if (next) {
+                    localStorage.removeItem(AFTER_ONBOARDING_NEXT);
+                    navigate(next, { replace: true });
+                } else {
+                    navigate("/", { replace: true });
+                }
                 return;
             }
+
+            // Prefill if any partial data already exists (e.g., Google displayName sync)
+            if (snap.exists()) {
+                const d = snap.data() as any;
+                if (d?.firstName) setFirstName(d.firstName);
+                if (d?.lastName) setLastName(d.lastName);
+            }
+
             setChecking(false);
         });
         return () => unsub();
     }, [navigate]);
 
-    // Pure validation: returns error message without mutating state
+    // Pure validation
     function getFieldError(name: "firstName" | "lastName", value: string) {
         const v = value.trim();
         if (!v) return name === "firstName" ? "First name is required" : "Last name is required";
@@ -50,14 +68,13 @@ export default function Onboarding() {
         return "";
     }
 
-    // Stateful validation: updates error state; call from input events only
+    // Stateful validation
     function runFieldValidation(name: "firstName" | "lastName", value: string) {
         const msg = getFieldError(name, value);
         setFieldErr((p) => ({ ...p, [name]: msg || undefined }));
         return !msg;
     }
 
-    // Derived form validity for enabling the Continue button (pure computation)
     const isFormValid =
         !getFieldError("firstName", firstName) &&
         !getFieldError("lastName", lastName);
@@ -68,7 +85,6 @@ export default function Onboarding() {
 
         setErr(null);
 
-        // Final validation before submit
         const okFirst = runFieldValidation("firstName", firstName);
         const okLast = runFieldValidation("lastName", lastName);
         if (!okFirst || !okLast) {
@@ -94,7 +110,21 @@ export default function Onboarding() {
                 { merge: true }
             );
 
-            navigate("/", { replace: true });
+            await upsertEmailIndex({
+                uid: user.uid,
+                email: user.email ?? undefined,
+                firstName: firstName.trim(),
+                lastName: lastName.trim(),
+            });
+
+            // Redirect: if we saved a destination (like an invite link), go there
+            const next = localStorage.getItem(AFTER_ONBOARDING_NEXT);
+            if (next) {
+                localStorage.removeItem(AFTER_ONBOARDING_NEXT);
+                navigate(next, { replace: true });
+            } else {
+                navigate("/", { replace: true });
+            }
         } catch (e: any) {
             setErr("Could not save your profile. Please try again.");
             console.error(e);
@@ -116,13 +146,11 @@ export default function Onboarding() {
 
     return (
         <div className="relative min-h-screen overflow-hidden bg-gradient-to-br from-sky-50 via-indigo-50 to-purple-50">
-            {/* Background decorative blobs (non-interactive) */}
             <div className="pointer-events-none absolute -top-24 -left-24 h-72 w-72 rounded-full bg-sky-200/60 blur-3xl" />
             <div className="pointer-events-none absolute -bottom-24 -right-24 h-80 w-80 rounded-full bg-indigo-200/60 blur-3xl" />
 
             <div className="relative z-10 flex min-h-screen items-center justify-center p-4">
-                <div className="w-full max-w-md">
-                    {/* Header: brand mark and page title */}
+                <div className="w/full max-w-md">
                     <div className="mb-6 flex flex-col items-center text-center">
                         <div className="mb-3 grid h-12 w-12 place-items-center rounded-2xl bg-gradient-to-tr from-sky-600 to-indigo-600 text-white shadow-lg">
                             <svg viewBox="0 0 24 24" className="h-6 w-6" fill="none" stroke="currentColor" strokeWidth="2">
@@ -134,7 +162,6 @@ export default function Onboarding() {
                         <p className="mt-1 text-sm text-slate-600">Just a few details to get started</p>
                     </div>
 
-                    {/* Onboarding form card */}
                     <div className="rounded-3xl border border-white/40 bg-white/70 p-6 shadow-xl backdrop-blur">
                         <form className="space-y-5" onSubmit={onSubmit} noValidate>
                             <div>

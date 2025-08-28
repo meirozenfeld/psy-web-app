@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { auth, db } from "../../firebase";
 import { doc, getDoc } from "firebase/firestore";
+import { useScopedRefs } from "../../scope/path"; // <-- scope-aware ref builders (solo/org)
 
 type Props = {
     clientId: string;
@@ -15,9 +16,10 @@ type Client = {
     phone?: string;
 };
 
+// --- Helpers for contact actions ---
+// NOTE: Keep digits and leading plus for WhatsApp/phone, strip other characters.
 function sanitizePhoneForWa(phone?: string) {
     if (!phone) return "";
-    // Keep digits and leading plus, remove other chars
     const trimmed = phone.trim();
     if (trimmed.startsWith("+")) {
         return "+" + trimmed.slice(1).replace(/\D/g, "");
@@ -25,20 +27,21 @@ function sanitizePhoneForWa(phone?: string) {
     return trimmed.replace(/\D/g, "");
 }
 
+// NOTE: Build a simple mailto: link; subject/body are URL-encoded.
 function buildMailtoLink(email: string, subject: string, body: string) {
     const s = encodeURIComponent(subject || "");
     const b = encodeURIComponent(body || "");
     return `mailto:${email}?subject=${s}&body=${b}`;
 }
 
+// NOTE: Use wa.me format; if phone is missing, open generic composer.
 function buildWhatsAppLink(phone: string, text: string) {
-    // Use wa.me with international format
     const p = sanitizePhoneForWa(phone);
     const t = encodeURIComponent(text || "");
-    // If phone is missing, default to generic WhatsApp share (will ask user to pick contact)
     return p ? `https://wa.me/${p}?text=${t}` : `https://wa.me/?text=${t}`;
 }
 
+// NOTE: tel: link builder; uses sanitized digits.
 function buildTelLink(phone: string) {
     const p = sanitizePhoneForWa(phone);
     return p ? `tel:${p}` : `tel:`;
@@ -46,6 +49,10 @@ function buildTelLink(phone: string) {
 
 export default function ContactTab({ clientId, onError }: Props) {
     const user = auth.currentUser;
+
+    // ✅ Scope-aware helpers (resolve to users/{uid}/... or orgs/{orgId}/...)
+    const { doc: scopedDoc } = useScopedRefs();
+
     const [loading, setLoading] = useState(true);
     const [client, setClient] = useState<Client | null>(null);
 
@@ -54,26 +61,32 @@ export default function ContactTab({ clientId, onError }: Props) {
     const [emailBody, setEmailBody] = useState("");
     const [waText, setWaText] = useState("");
 
-    // Load client doc once
+    // ✅ Load client doc from the correct collection based on current scope:
+    //    - Solo: users/{uid}/clients/{clientId}
+    //    - Org : orgs/{orgId}/clients/{clientId}
     useEffect(() => {
         let active = true;
         async function run() {
-            if (!user?.uid) {
+            // Defensive guard: we need an authenticated user + client id
+            if (!user?.uid || !clientId) {
                 onError?.("Missing user context");
                 setLoading(false);
                 return;
             }
             try {
-                const ref = doc(db, "users", user.uid, "clients", clientId);
+                // IMPORTANT: scope-aware path (no hard-coded "users/.../clients")
+                const ref = scopedDoc(db, "clients", clientId);
                 const snap = await getDoc(ref);
+
                 if (!active) return;
+
                 if (!snap.exists()) {
                     onError?.("Client not found");
                     setClient(null);
                 } else {
                     const data = snap.data() as Client;
                     setClient(data);
-                    onError?.(null);
+                    onError?.(null); // clear previous error (if any)
                 }
             } catch (e: any) {
                 onError?.(e?.message || "Failed to load client");
@@ -86,7 +99,7 @@ export default function ContactTab({ clientId, onError }: Props) {
         return () => {
             active = false;
         };
-    }, [clientId, user?.uid, onError]);
+    }, [clientId, user?.uid, scopedDoc, onError]); // <-- re-run when scope/user changes
 
     // Prefill helpful defaults once client is loaded
     useEffect(() => {

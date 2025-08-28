@@ -1,6 +1,11 @@
+// components/clientDetails/ProfileTab.tsx
 import React, { useEffect, useState } from "react";
 import { auth, db } from "../../firebase";
-import { doc, getDoc, updateDoc, serverTimestamp, deleteDoc } from "firebase/firestore";
+import {
+    doc, getDoc, updateDoc, serverTimestamp, deleteDoc,
+    type DocumentData
+} from "firebase/firestore";
+import { useScopedRefs } from "../../scope/path"; // <-- use scope-aware builders
 
 type Client = {
     firstName: string;
@@ -13,16 +18,17 @@ type Client = {
 };
 
 type Props = {
-    clientId: string;                 // The Firestore doc id of this client
-    onError: (msg: string) => void;   // Bubble errors up to parent
-    onNameChange?: (fullName: string) => void; // Allow parent header to update when name changes
-    onDeleted?: () => void;           // Navigate away after deletion
+    clientId: string;
+    onError: (msg: string) => void;
+    onNameChange?: (fullName: string) => void;
+    onDeleted?: () => void;
 };
 
 export default function ProfileTab({ clientId, onError, onNameChange, onDeleted }: Props) {
     const user = auth.currentUser;
+    const { doc: scopedDoc } = useScopedRefs();  // <-- scope-aware doc()
 
-    // Local form state (mirrors previous implementation)
+    // Local form state
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
 
@@ -32,13 +38,15 @@ export default function ProfileTab({ clientId, onError, onNameChange, onDeleted 
     const [phone, setPhone] = useState("");
     const [status, setStatus] = useState<Client["status"]>("active");
 
-    // Load client on mount
+    // ✅ Load client from the correct collection based on current scope:
+    //    - Solo: users/{uid}/clients/{clientId}
+    //    - Org : orgs/{orgId}/clients/{clientId}
     useEffect(() => {
         let alive = true;
         (async () => {
             if (!user?.uid || !clientId) return;
             try {
-                const ref = doc(db, "users", user.uid, "clients", clientId);
+                const ref = scopedDoc(db, "clients", clientId); // <-- key change
                 const snap = await getDoc(ref);
                 if (!alive) return;
                 if (!snap.exists()) {
@@ -59,15 +67,15 @@ export default function ProfileTab({ clientId, onError, onNameChange, onDeleted 
             }
         })();
         return () => { alive = false; };
-    }, [user?.uid, clientId]);
+    }, [user?.uid, clientId, scopedDoc]); // <-- re-run if scope changes
 
-    // Save edits back to Firestore
+    // ✅ Save to the correct place (solo/org)
     const onSave = async (e: React.FormEvent) => {
         e.preventDefault();
         if (!user?.uid || !clientId) return;
         setSaving(true);
         try {
-            const ref = doc(db, "users", user.uid, "clients", clientId);
+            const ref = scopedDoc(db, "clients", clientId); // <-- key change
             const payload = {
                 firstName: firstName.trim(),
                 lastName: lastName.trim(),
@@ -85,12 +93,13 @@ export default function ProfileTab({ clientId, onError, onNameChange, onDeleted 
         }
     };
 
-    // Delete client doc (hard delete)
+    // ✅ Delete from the correct place (solo/org)
     const onDelete = async () => {
         if (!user?.uid || !clientId) return;
         if (!confirm("Delete this client? This cannot be undone.")) return;
         try {
-            await deleteDoc(doc(db, "users", user.uid, "clients", clientId));
+            const ref = scopedDoc(db, "clients", clientId); // <-- key change
+            await deleteDoc(ref);
             onDeleted?.();
         } catch (e: any) {
             onError(e?.message || "Failed to delete");
